@@ -17,7 +17,6 @@ input_stream: "input_video"
 
 # Detected faces. (std::vector<Detection>)
 output_stream: "face_detections"
-output_stream: "face_detections_presence"
 
 # Throttles the images flowing downstream for flow control. It passes through
 # the very first incoming image unaltered, and waits for downstream nodes

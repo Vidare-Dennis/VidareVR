@@ -14,5 +14,7 @@ class FaceMeshValue {
 
   public FaceMeshValue(List<NormalizedLandmarkList> landmarks, List<NormalizedRect> rects) : this(landmarks, rects, new List<Detection>()) {}
 
-  public FaceMeshValue() : this(new List<NormalizedLandmarkList>(), new List<NormalizedRect>()) {}
+  public FaceMeshValue(List<NormalizedLandmarkList> landmarks) : this(landmarks, new List<NormalizedRect>()) {}
+
+  public FaceMeshValue() : this(new List<NormalizedLandmarkList>()) {}
 }

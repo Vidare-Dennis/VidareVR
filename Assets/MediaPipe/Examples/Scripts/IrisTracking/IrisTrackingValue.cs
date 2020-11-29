@@ -13,6 +13,4 @@ class IrisTrackingValue {
   }
 
   public IrisTrackingValue(NormalizedLandmarkList landmarkList, NormalizedRect rect) : this(landmarkList, rect, new List<Detection>()) {}
-
-  public IrisTrackingValue() : this(null, null) {}
 }

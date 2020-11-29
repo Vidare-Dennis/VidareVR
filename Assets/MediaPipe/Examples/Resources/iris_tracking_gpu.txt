@@ -22,29 +22,6 @@ input_stream: "input_video"
 output_stream: "face_landmarks_with_iris"
 output_stream: "face_rect"
 output_stream: "face_detections"
-output_stream: "face_landmarks_with_iris_presence"
-output_stream: "face_detections_presence"
-
-# Throttles the images flowing downstream for flow control. It passes through
-# the very first incoming image unaltered, and waits for downstream nodes
-# (calculators and subgraphs) in the graph to finish their tasks before it
-# passes through another image. All images that come in while waiting are
-# dropped, limiting the number of in-flight images in most part of the graph to
-# 1. This prevents the downstream nodes from queuing up incoming images and data
-# excessively, which leads to increased latency and memory usage, unwanted in
-# real-time mobile applications. It also eliminates unnecessarily computation,
-# e.g., the output produced by a node may get dropped downstream if the
-# subsequent nodes are still busy processing previous inputs.
-node {
-  calculator: "FlowLimiterCalculator"
-  input_stream: "input_video"
-  input_stream: "FINISHED:face_landmarks_with_iris_presence"
-  input_stream_info: {
-    tag_index: "FINISHED"
-    back_edge: true
-  }
-  output_stream: "throttled_input_video"
-}
 
 node: {
   calculator: "ImageTransformationCalculator"
@@ -176,16 +153,4 @@ node {
   input_stream: "updated_face_landmarks"
   input_stream: "iris_landmarks"
   output_stream: "face_landmarks_with_iris"
-}
-
-node {
-  calculator: "PacketPresenceCalculator"
-  input_stream: "PACKET:face_landmarks_with_iris"
-  output_stream: "PRESENCE:face_landmarks_with_iris_presence"
-}
-
-node {
-  calculator: "PacketPresenceCalculator"
-  input_stream: "PACKET:face_detections"
-  output_stream: "PRESENCE:face_detections_presence"
 }

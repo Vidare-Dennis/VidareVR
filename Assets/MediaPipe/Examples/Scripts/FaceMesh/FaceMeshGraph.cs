@@ -1,52 +1,57 @@
 using Mediapipe;
+using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using UnityEngine;
 
 public class FaceMeshGraph : DemoGraph {
   [SerializeField] int numFaces = 1;
 
   private const string multiFaceLandmarksStream = "multi_face_landmarks";
-  private OutputStreamPoller<List<NormalizedLandmarkList>> multiFaceLandmarksStreamPoller;
-  private NormalizedLandmarkListVectorPacket multiFaceLandmarksPacket;
-
   private const string faceRectsFromLandmarksStream = "face_rects_from_landmarks";
-  private OutputStreamPoller<List<NormalizedRect>> faceRectsFromLandmarksStreamPoller;
-  private NormalizedRectVectorPacket faceRectsFromLandmarksPacket;
-
   private const string faceDetectionsStream = "face_detections";
-  private OutputStreamPoller<List<Detection>> faceDetectionsStreamPoller;
-  private DetectionVectorPacket faceDetectionsPacket;
-
-  private const string multiFaceLandmarksPresenceStream = "multi_face_landmarks_presence";
-  private OutputStreamPoller<bool> multiFacelandmarksPresenceStreamPoller;
-  private BoolPacket multiFaceLandmarksPresencePacket;
-
-  private const string faceDetectionsPresenceStream = "face_detections_presence";
-  private OutputStreamPoller<bool> faceDetectionsPresenceStreamPoller;
-  private BoolPacket faceDetectionsPresencePacket;
 
   private SidePacket sidePacket;
+  private Stack<List<NormalizedLandmarkList>> multiFaceLandmarkLists;
+  private Stack<List<NormalizedRect>> faceRectLists;
+  private Stack<List<Detection>> faceDetectionLists;
+  private GCHandle multiFaceLandmarksCallbackHandle;
+  private GCHandle faceRectsFromLandmarksCallbackHandle;
+  private GCHandle faceDetectionsCallbackHandle;
 
   public override Status StartRun() {
-    multiFaceLandmarksStreamPoller = graph.AddOutputStreamPoller<List<NormalizedLandmarkList>>(multiFaceLandmarksStream).ConsumeValueOrDie();
-    multiFaceLandmarksPacket = new NormalizedLandmarkListVectorPacket();
+    multiFaceLandmarkLists = new Stack<List<NormalizedLandmarkList>>();
+    graph.ObserveOutputStream<NormalizedLandmarkListVectorPacket, List<NormalizedLandmarkList>>(
+        multiFaceLandmarksStream, MultiFaceLandmarksCallback, out multiFaceLandmarksCallbackHandle).AssertOk();
 
-    faceRectsFromLandmarksStreamPoller = graph.AddOutputStreamPoller<List<NormalizedRect>>(faceRectsFromLandmarksStream).ConsumeValueOrDie();
-    faceRectsFromLandmarksPacket = new NormalizedRectVectorPacket();
+    faceRectLists = new Stack<List<NormalizedRect>>();
+    graph.ObserveOutputStream<NormalizedRectVectorPacket, List<NormalizedRect>>(
+        faceRectsFromLandmarksStream, FaceRectsFromLandmarksCallback, out faceRectsFromLandmarksCallbackHandle).AssertOk();
 
-    faceDetectionsStreamPoller = graph.AddOutputStreamPoller<List<Detection>>(faceDetectionsStream).ConsumeValueOrDie();
-    faceDetectionsPacket = new DetectionVectorPacket();
-
-    multiFacelandmarksPresenceStreamPoller = graph.AddOutputStreamPoller<bool>(multiFaceLandmarksPresenceStream).ConsumeValueOrDie();
-    multiFaceLandmarksPresencePacket = new BoolPacket();
-
-    faceDetectionsPresenceStreamPoller = graph.AddOutputStreamPoller<bool>(faceDetectionsPresenceStream).ConsumeValueOrDie();
-    faceDetectionsPresencePacket = new BoolPacket();
+    faceDetectionLists = new Stack<List<Detection>>();
+    graph.ObserveOutputStream<DetectionVectorPacket, List<Detection>>(
+        faceDetectionsStream, FaceDetectionsCallback, out faceDetectionsCallbackHandle).AssertOk();
 
     sidePacket = new SidePacket();
     sidePacket.Emplace("num_faces", new IntPacket(numFaces));
 
     return graph.StartRun(sidePacket);
+  }
+
+  protected override void OnDestroy() {
+    base.OnDestroy();
+
+    if (multiFaceLandmarksCallbackHandle.IsAllocated) {
+      multiFaceLandmarksCallbackHandle.Free();
+    }
+
+    if (faceRectsFromLandmarksCallbackHandle.IsAllocated) {
+      faceRectsFromLandmarksCallbackHandle.Free();
+    }
+
+    if (faceDetectionsCallbackHandle.IsAllocated) {
+      faceDetectionsCallbackHandle.Free();
+    }
   }
 
   public override void RenderOutput(WebCamScreenController screenController, TextureFrame textureFrame) {
@@ -57,46 +62,82 @@ public class FaceMeshGraph : DemoGraph {
   }
 
   private FaceMeshValue FetchNextFaceMeshValue() {
-    if (!FetchNextMultiFaceLandmarksPresence()) {
+    List<NormalizedLandmarkList> multiFaceLandmarks = null;
+
+    lock (((ICollection)multiFaceLandmarkLists).SyncRoot) {
+      if (multiFaceLandmarkLists.Count > 0) {
+        multiFaceLandmarks = multiFaceLandmarkLists.Peek();
+        multiFaceLandmarkLists.Clear();
+      }
+    }
+
+    if (multiFaceLandmarks == null) {
       // face not found
       return new FaceMeshValue();
     }
 
-    var multiFaceLandmarks = FetchNextMultiFaceLandmarks();
-    var faceRects = FetchNextFaceRectsFromLandmarks();
+    List<NormalizedRect> faceRects = null;
 
-    if (!FetchNextFaceDetectionsPresence()) {
+    lock (((ICollection)faceRectLists).SyncRoot) {
+      if (faceRectLists.Count > 0) {
+        faceRects = faceRectLists.Peek();
+        faceRectLists.Clear();
+      }
+    }
+
+    if (faceRects == null) {
+      return new FaceMeshValue(multiFaceLandmarks);
+    }
+
+    List<Detection> faceDetections = null;
+
+    lock (((ICollection)faceDetectionLists).SyncRoot) {
+      if (faceDetectionLists.Count > 0) {
+        faceDetections = faceDetectionLists.Peek();
+        faceDetectionLists.Clear();
+      }
+    }
+
+    if (faceDetections == null) {
       return new FaceMeshValue(multiFaceLandmarks, faceRects);
     }
 
-    var faceDetections = FetchNextFaceDetections();
-
     return new FaceMeshValue(multiFaceLandmarks, faceRects, faceDetections);
-  }
-
-  private bool FetchNextMultiFaceLandmarksPresence() {
-    return FetchNext(multiFacelandmarksPresenceStreamPoller, multiFaceLandmarksPresencePacket, multiFaceLandmarksPresenceStream);
-  }
-
-  private List<NormalizedLandmarkList> FetchNextMultiFaceLandmarks() {
-    return FetchNextVector(multiFaceLandmarksStreamPoller, multiFaceLandmarksPacket, multiFaceLandmarksStream);
-  }
-
-  private List<NormalizedRect> FetchNextFaceRectsFromLandmarks() {
-    return FetchNextVector(faceRectsFromLandmarksStreamPoller, faceRectsFromLandmarksPacket, faceRectsFromLandmarksStream);
-  }
-
-  private bool FetchNextFaceDetectionsPresence() {
-    return FetchNext(faceDetectionsPresenceStreamPoller, faceDetectionsPresencePacket, faceDetectionsPresenceStream);
-  }
-
-  private List<Detection> FetchNextFaceDetections() {
-    return FetchNextVector(faceDetectionsStreamPoller, faceDetectionsPacket, faceDetectionsStream);
   }
 
   private void RenderAnnotation(WebCamScreenController screenController, FaceMeshValue value) {
     // NOTE: input image is flipped
     GetComponent<FaceMeshAnnotationController>().Draw(
         screenController.transform, value.MultiFaceLandmarks, value.FaceRectsFromLandmarks, value.FaceDetections, true);
+  }
+
+  private Status MultiFaceLandmarksCallback(NormalizedLandmarkListVectorPacket packet) {
+    var value = packet.Get();
+
+    lock (((ICollection)multiFaceLandmarkLists).SyncRoot) {
+      multiFaceLandmarkLists.Push(value);
+    }
+
+    return Status.Ok();
+  }
+
+  private Status FaceRectsFromLandmarksCallback(NormalizedRectVectorPacket packet) {
+    var value = packet.Get();
+
+    lock (((ICollection)faceRectLists).SyncRoot) {
+      faceRectLists.Push(value);
+    }
+
+    return Status.Ok();
+  }
+
+  private Status FaceDetectionsCallback(DetectionVectorPacket packet) {
+    var value = packet.Get();
+
+    lock (((ICollection)faceDetectionLists).SyncRoot) {
+      faceDetectionLists.Push(value);
+    }
+
+    return Status.Ok();
   }
 }

@@ -1,45 +1,50 @@
 using Mediapipe;
+using System.Collections;
 using System.Collections.Generic;
-using UnityEngine;
+using System.Runtime.InteropServices;
 
 public class IrisTrackingGraph : DemoGraph {
   private const string faceLandmarksWithIrisStream = "face_landmarks_with_iris";
-  private OutputStreamPoller<NormalizedLandmarkList> faceLandmarksWithIrisStreamPoller;
-  private NormalizedLandmarkListPacket faceLandmarksWithIrisPacket;
-
   private const string faceRectStream = "face_rect";
-  private OutputStreamPoller<NormalizedRect> faceRectStreamPoller;
-  private NormalizedRectPacket faceRectPacket;
-
   private const string faceDetectionsStream = "face_detections";
-  private OutputStreamPoller<List<Detection>> faceDetectionsStreamPoller;
-  private DetectionVectorPacket faceDetectionsPacket;
 
-  private const string faceLandmarksWithIrisPresenceStream = "face_landmarks_with_iris_presence";
-  private OutputStreamPoller<bool> faceLandmarksWithIrisPresenceStreamPoller;
-  private BoolPacket faceLandmarksWithIrisPresencePacket;
+  private Stack<NormalizedLandmarkList> faceLandmarksWithIrises;
+  private Stack<NormalizedRect> faceRects;
+  private Stack<List<Detection>> faceDetectionLists;
+  private GCHandle faceLandmarksWithIrisCallbackHandle;
+  private GCHandle faceRectCallbackHandle;
+  private GCHandle faceDetectionsCallbackHandle;
 
-  private const string faceDetectionsPresenceStream = "face_detections_presence";
-  private OutputStreamPoller<bool> faceDetectionsPresenceStreamPoller;
-  private BoolPacket faceDetectionsPresencePacket;
 
   public override Status StartRun() {
-    faceLandmarksWithIrisStreamPoller = graph.AddOutputStreamPoller<NormalizedLandmarkList>(faceLandmarksWithIrisStream).ConsumeValueOrDie();
-    faceLandmarksWithIrisPacket = new NormalizedLandmarkListPacket();
+    faceLandmarksWithIrises = new Stack<NormalizedLandmarkList>();
+    graph.ObserveOutputStream<NormalizedLandmarkListPacket, NormalizedLandmarkList>(
+        faceLandmarksWithIrisStream, FaceLandmarksWithIrisCallback, out faceLandmarksWithIrisCallbackHandle).AssertOk();
 
-    faceRectStreamPoller = graph.AddOutputStreamPoller<NormalizedRect>(faceRectStream).ConsumeValueOrDie();
-    faceRectPacket = new NormalizedRectPacket();
+    faceRects = new Stack<NormalizedRect>();
+    graph.ObserveOutputStream<NormalizedRectPacket, NormalizedRect>(faceRectStream, FaceRectCallback, out faceRectCallbackHandle).AssertOk();
 
-    faceDetectionsStreamPoller = graph.AddOutputStreamPoller<List<Detection>>(faceDetectionsStream).ConsumeValueOrDie();
-    faceDetectionsPacket = new DetectionVectorPacket();
-
-    faceLandmarksWithIrisPresenceStreamPoller = graph.AddOutputStreamPoller<bool>(faceLandmarksWithIrisPresenceStream).ConsumeValueOrDie();
-    faceLandmarksWithIrisPresencePacket = new BoolPacket();
-
-    faceDetectionsPresenceStreamPoller = graph.AddOutputStreamPoller<bool>(faceDetectionsPresenceStream).ConsumeValueOrDie();
-    faceDetectionsPresencePacket = new BoolPacket();
+    faceDetectionLists = new Stack<List<Detection>>();
+    graph.ObserveOutputStream<DetectionVectorPacket, List<Detection>>(
+        faceDetectionsStream, FaceDetectionsCallback, out faceDetectionsCallbackHandle).AssertOk();
 
     return graph.StartRun();
+  }
+
+  protected override void OnDestroy() {
+    base.OnDestroy();
+
+    if (faceLandmarksWithIrisCallbackHandle.IsAllocated) {
+      faceLandmarksWithIrisCallbackHandle.Free();
+    }
+
+    if (faceRectCallbackHandle.IsAllocated) {
+      faceRectCallbackHandle.Free();
+    }
+
+    if (faceDetectionsCallbackHandle.IsAllocated) {
+      faceDetectionsCallbackHandle.Free();
+    }
   }
 
   public override void RenderOutput(WebCamScreenController screenController, TextureFrame textureFrame) {
@@ -50,46 +55,73 @@ public class IrisTrackingGraph : DemoGraph {
   }
 
   private IrisTrackingValue FetchNextIrisTrackingValue() {
-    if (!FetchNextFaceLandmarksWithIrisPresence()) {
-      // face not found
-      return new IrisTrackingValue();
+    NormalizedLandmarkList faceLandmarksWithIris = null;
+
+    lock (((ICollection)faceLandmarksWithIrises).SyncRoot) {
+      if (faceLandmarksWithIrises.Count > 0) {
+        faceLandmarksWithIris = faceLandmarksWithIrises.Peek();
+        faceLandmarksWithIrises.Clear();
+      }
     }
 
-    var multiFaceLandmarks = FetchNextFaceLandmarksWithIris();
-    var faceRects = FetchNextFaceRect();
+    NormalizedRect faceRect = null;
 
-    if (!FetchNextFaceDetectionsPresence()) {
-      return new IrisTrackingValue(multiFaceLandmarks, faceRects);
+    lock (((ICollection)faceRects).SyncRoot) {
+      if (faceRects.Count > 0) {
+        faceRect = faceRects.Peek();
+        faceRects.Clear();
+      }
     }
 
-    var faceDetections = FetchNextFaceDetections();
+    List<Detection> faceDetections = null;
 
-    return new IrisTrackingValue(multiFaceLandmarks, faceRects, faceDetections);
-  }
+    lock (((ICollection)faceDetectionLists).SyncRoot) {
+      if (faceDetectionLists.Count > 0) {
+        faceDetections = faceDetectionLists.Peek();
+        faceDetectionLists.Clear();
+      }
+    }
 
-  private bool FetchNextFaceLandmarksWithIrisPresence() {
-    return FetchNext(faceLandmarksWithIrisPresenceStreamPoller, faceLandmarksWithIrisPresencePacket, faceLandmarksWithIrisPresenceStream);
-  }
+    if (faceDetections == null) {
+      return new IrisTrackingValue(faceLandmarksWithIris, faceRect);
+    }
 
-  private NormalizedLandmarkList FetchNextFaceLandmarksWithIris() {
-    return FetchNext(faceLandmarksWithIrisStreamPoller, faceLandmarksWithIrisPacket, faceLandmarksWithIrisStream);
-  }
-
-  private NormalizedRect FetchNextFaceRect() {
-    return FetchNext(faceRectStreamPoller, faceRectPacket, faceRectStream);
-  }
-
-  private bool FetchNextFaceDetectionsPresence() {
-    return FetchNext(faceDetectionsPresenceStreamPoller, faceDetectionsPresencePacket, faceDetectionsPresenceStream);
-  }
-
-  private List<Detection> FetchNextFaceDetections() {
-    return FetchNextVector(faceDetectionsStreamPoller, faceDetectionsPacket, faceDetectionsStream);
+    return new IrisTrackingValue(faceLandmarksWithIris, faceRect, faceDetections);
   }
 
   private void RenderAnnotation(WebCamScreenController screenController, IrisTrackingValue value) {
     // NOTE: input image is flipped
     GetComponent<IrisTrackingAnnotationController>().Draw(
         screenController.transform, value.FaceLandmarksWithIris, value.FaceRect, value.FaceDetections, true);
+  }
+
+  private Status FaceLandmarksWithIrisCallback(NormalizedLandmarkListPacket packet) {
+    var value = packet.Get();
+
+    lock (((ICollection)faceLandmarksWithIrises).SyncRoot) {
+      faceLandmarksWithIrises.Push(value);
+    }
+
+    return Status.Ok();
+  }
+
+  private Status FaceRectCallback(NormalizedRectPacket packet) {
+    var value = packet.Get();
+
+    lock (((ICollection)faceRects).SyncRoot) {
+      faceRects.Push(value);
+    }
+
+    return Status.Ok();
+  }
+
+  private Status FaceDetectionsCallback(DetectionVectorPacket packet) {
+    var value = packet.Get();
+
+    lock (((ICollection)faceDetectionLists).SyncRoot) {
+      faceDetectionLists.Push(value);
+    }
+
+    return Status.Ok();
   }
 }

@@ -1,37 +1,39 @@
 using Mediapipe;
-using UnityEngine;
+using System.Collections;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
 
 public class PoseTrackingGraph : DemoGraph {
   private const string poseLandmarksStream = "pose_landmarks_smoothed";
-  private OutputStreamPoller<NormalizedLandmarkList> poseLandmarksStreamPoller;
-  private NormalizedLandmarkListPacket poseLandmarksPacket;
-
   private const string poseDetectionStream = "pose_detection";
-  private OutputStreamPoller<Detection> poseDetectionStreamPoller;
-  private DetectionPacket poseDetectionPacket;
 
-  private const string poseLandmarksPresenceStream = "pose_landmarks_smoothed_presence";
-  private OutputStreamPoller<bool> poseLandmarksPresenceStreamPoller;
-  private BoolPacket poseLandmarksPresencePacket;
-
-  private const string poseDetectionPresenceStream = "pose_detection_presence";
-  private OutputStreamPoller<bool> poseDetectionPresenceStreamPoller;
-  private BoolPacket poseDetectionPresencePacket;
+  private Stack<NormalizedLandmarkList> poseLandmarkLists;
+  private Stack<Detection> poseDetections;
+  private GCHandle poseLandmarksCallbackHandle;
+  private GCHandle poseDetectionCallbackHandle;
 
   public override Status StartRun() {
-    poseLandmarksStreamPoller = graph.AddOutputStreamPoller<NormalizedLandmarkList>(poseLandmarksStream).ConsumeValueOrDie();
-    poseLandmarksPacket = new NormalizedLandmarkListPacket();
+    poseLandmarkLists = new Stack<NormalizedLandmarkList>();
+    graph.ObserveOutputStream<NormalizedLandmarkListPacket, NormalizedLandmarkList>(
+        poseLandmarksStream, PoseLandmarksCallback, out poseLandmarksCallbackHandle).AssertOk();
 
-    poseDetectionStreamPoller = graph.AddOutputStreamPoller<Detection>(poseDetectionStream).ConsumeValueOrDie();
-    poseDetectionPacket = new DetectionPacket();
-
-    poseLandmarksPresenceStreamPoller = graph.AddOutputStreamPoller<bool>(poseLandmarksPresenceStream).ConsumeValueOrDie();
-    poseLandmarksPresencePacket = new BoolPacket();
-
-    poseDetectionPresenceStreamPoller = graph.AddOutputStreamPoller<bool>(poseDetectionPresenceStream).ConsumeValueOrDie();
-    poseDetectionPresencePacket = new BoolPacket();
+    poseDetections = new Stack<Detection>();
+    graph.ObserveOutputStream<DetectionPacket, Detection>(
+        poseDetectionStream, PoseDetectionCallback, out poseDetectionCallbackHandle).AssertOk();
 
     return graph.StartRun();
+  }
+
+  protected override void OnDestroy() {
+    base.OnDestroy();
+
+    if (poseLandmarksCallbackHandle.IsAllocated) {
+      poseLandmarksCallbackHandle.Free();
+    }
+
+    if (poseDetectionCallbackHandle.IsAllocated) {
+      poseDetectionCallbackHandle.Free();
+    }
   }
 
   public override void RenderOutput(WebCamScreenController screenController, TextureFrame textureFrame) {
@@ -42,39 +44,57 @@ public class PoseTrackingGraph : DemoGraph {
   }
 
   private PoseTrackingValue FetchNextPoseTrackingValue() {
-    if (!FetchNextPoseLandmarksPresence()) {
+    NormalizedLandmarkList poseLandmarks = null;
+
+    lock (((ICollection)poseLandmarkLists).SyncRoot) {
+      if (poseLandmarkLists.Count > 0) {
+        poseLandmarks = poseLandmarkLists.Peek();
+        poseLandmarkLists.Clear();
+      }
+    }
+
+    if (poseLandmarks == null) {
       return new PoseTrackingValue();
     }
 
-    var poseLandmarks = FetchNextPoseLandmarks();
+    Detection poseDetection = null;
 
-    if (!FetchNextPoseDetectionPresence()) {
+    lock (((ICollection)poseDetections).SyncRoot) {
+      if (poseDetections.Count > 0) {
+        poseDetection = poseDetections.Peek();
+        poseDetections.Clear();
+      }
+    }
+
+    if (poseDetection == null) {
       return new PoseTrackingValue(poseLandmarks);
     }
 
-    var poseDetection = FetchNextPoseDetection();
-
     return new PoseTrackingValue(poseLandmarks, poseDetection);
-  }
-
-  private NormalizedLandmarkList FetchNextPoseLandmarks() {
-    return FetchNext(poseLandmarksStreamPoller, poseLandmarksPacket, poseLandmarksStream);
-  }
-
-  private Detection FetchNextPoseDetection() {
-    return FetchNext(poseDetectionStreamPoller, poseDetectionPacket, poseDetectionStream);
-  }
-
-  private bool FetchNextPoseLandmarksPresence() {
-    return FetchNext(poseLandmarksPresenceStreamPoller, poseLandmarksPresencePacket, poseLandmarksPresenceStream);
-  }
-
-  private bool FetchNextPoseDetectionPresence() {
-    return FetchNext(poseDetectionPresenceStreamPoller, poseDetectionPresencePacket, poseDetectionPresenceStream);
   }
 
   private void RenderAnnotation(WebCamScreenController screenController, PoseTrackingValue value) {
     // NOTE: input image is flipped
     GetComponent<PoseTrackingAnnotationController>().Draw(screenController.transform, value.PoseLandmarkList, value.PoseDetection, true);
+  }
+
+  private Status PoseLandmarksCallback(NormalizedLandmarkListPacket packet) {
+    var value = packet.Get();
+
+    lock (((ICollection)poseLandmarkLists).SyncRoot) {
+      poseLandmarkLists.Push(value);
+    }
+
+    return Status.Ok();
+  }
+
+  private Status PoseDetectionCallback(DetectionPacket packet) {
+    var value = packet.Get();
+
+    lock (((ICollection)poseDetections).SyncRoot) {
+      poseDetections.Push(value);
+    }
+
+    return Status.Ok();
   }
 }

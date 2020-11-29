@@ -18,29 +18,6 @@ input_stream: "input_video"
 
 output_stream: "pose_landmarks_smoothed"
 output_stream: "pose_detection"
-output_stream: "pose_landmarks_smoothed_presence"
-output_stream: "pose_detection_presence"
-
-# Throttles the images flowing downstream for flow control. It passes through
-# the very first incoming image unaltered, and waits for downstream nodes
-# (calculators and subgraphs) in the graph to finish their tasks before it
-# passes through another image. All images that come in while waiting are
-# dropped, limiting the number of in-flight images in most part of the graph to
-# 1. This prevents the downstream nodes from queuing up incoming images and data
-# excessively, which leads to increased latency and memory usage, unwanted in
-# real-time mobile applications. It also eliminates unnecessarily computation,
-# e.g., the output produced by a node may get dropped downstream if the
-# subsequent nodes are still busy processing previous inputs.
-node {
-  calculator: "FlowLimiterCalculator"
-  input_stream: "input_video"
-  input_stream: "FINISHED:pose_landmarks_smoothed_presence"
-  input_stream_info: {
-    tag_index: "FINISHED"
-    back_edge: true
-  }
-  output_stream: "throttled_input_video"
-}
 
 node: {
   calculator: "ImageTransformationCalculator"
@@ -83,16 +60,4 @@ node {
       }
     }
   }
-}
-
-node {
-  calculator: "PacketPresenceCalculator"
-  input_stream: "PACKET:pose_landmarks_smoothed"
-  output_stream: "PRESENCE:pose_landmarks_smoothed_presence"
-}
-
-node {
-  calculator: "PacketPresenceCalculator"
-  input_stream: "PACKET:pose_detection"
-  output_stream: "PRESENCE:pose_detection_presence"
 }
